@@ -42,6 +42,7 @@
     font-variant-numeric: tabular-nums;
   }
   #best { opacity: 0.6; font-size: 14px; }
+  #breakdown { opacity: 0.5; font-size: 12px; font-variant-numeric: tabular-nums; }
   #addBtn {
     position: fixed;
     bottom: 30px;
@@ -118,8 +119,9 @@
 
 <div id="hud">
   <div>
-    <div id="score">0.0s</div>
-    <div id="best">Record: 0.0s</div>
+    <div id="score">0.0</div>
+    <div id="breakdown">0.0s + 0 urti</div>
+    <div id="best">Record: 0.0</div>
   </div>
 </div>
 
@@ -158,8 +160,9 @@
   let startTime = 0;
   let elapsed = 0;
   let lastFrameTime = 0;
+  let hits = 0;
   let best = parseFloat(localStorage.getItem('keepball_best') || '0');
-  bestEl.textContent = 'Record: ' + best.toFixed(1) + 's';
+  bestEl.textContent = 'Record: ' + best.toFixed(1);
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -216,6 +219,7 @@
     balls = [];
     spawnBall();
     elapsed = 0;
+    hits = 0;
     startTime = performance.now();
     lastFrameTime = startTime;
     running = true;
@@ -228,15 +232,16 @@
   }
 
   function checkBallInHole(b) {
-    // La pallina è uscita dalla scatola attraverso il buco?
+    // La pallina è persa appena il suo baricentro supera la linea del buco
+    // e si trova dentro l'apertura. Niente "torna in gioco".
     if (hole.side === 'bottom') {
-      if (b.y - BALL_RADIUS > box.y + box.h + 50) return true;
+      if (b.y > box.y + box.h && b.x >= hole.start && b.x <= hole.end) return true;
     } else if (hole.side === 'top') {
-      if (b.y + BALL_RADIUS < box.y - 50) return true;
+      if (b.y < box.y && b.x >= hole.start && b.x <= hole.end) return true;
     } else if (hole.side === 'left') {
-      if (b.x + BALL_RADIUS < box.x - 50) return true;
+      if (b.x < box.x && b.y >= hole.start && b.y <= hole.end) return true;
     } else if (hole.side === 'right') {
-      if (b.x - BALL_RADIUS > box.x + box.w + 50) return true;
+      if (b.x > box.x + box.w && b.y >= hole.start && b.y <= hole.end) return true;
     }
     return false;
   }
@@ -265,11 +270,14 @@
     const top = box.y + box.thickness / 2;
     const bottom = box.y + box.h - box.thickness / 2;
 
+    const HIT_MIN_SPEED = 1.5; // urti significativi: filtra "strisciate"
+
     // Collisioni con i muri (eccetto sopra il buco)
     // Bottom
     if (b.y + BALL_RADIUS > bottom) {
       if (!isInHole(b.x, 'bottom')) {
         b.y = bottom - BALL_RADIUS;
+        if (Math.abs(b.vy) > HIT_MIN_SPEED) hits++;
         b.vy = -b.vy * BOUNCE;
       }
     }
@@ -277,6 +285,7 @@
     if (b.y - BALL_RADIUS < top) {
       if (!isInHole(b.x, 'top')) {
         b.y = top + BALL_RADIUS;
+        if (Math.abs(b.vy) > HIT_MIN_SPEED) hits++;
         b.vy = -b.vy * BOUNCE;
       }
     }
@@ -284,6 +293,7 @@
     if (b.x - BALL_RADIUS < left) {
       if (!isInHole(b.y, 'left')) {
         b.x = left + BALL_RADIUS;
+        if (Math.abs(b.vx) > HIT_MIN_SPEED) hits++;
         b.vx = -b.vx * BOUNCE;
       }
     }
@@ -291,6 +301,7 @@
     if (b.x + BALL_RADIUS > right) {
       if (!isInHole(b.y, 'right')) {
         b.x = right - BALL_RADIUS;
+        if (Math.abs(b.vx) > HIT_MIN_SPEED) hits++;
         b.vx = -b.vx * BOUNCE;
       }
     }
@@ -322,6 +333,7 @@
             a.vy += impulse * ny;
             b.vx -= impulse * nx;
             b.vy -= impulse * ny;
+            if (Math.abs(vn) > 1.5) hits++;
           }
         }
       }
@@ -458,7 +470,9 @@
     }
 
     elapsed = (now - startTime) / 1000;
-    scoreEl.textContent = elapsed.toFixed(1) + 's';
+    const score = elapsed + hits;
+    scoreEl.textContent = score.toFixed(1);
+    document.getElementById('breakdown').textContent = `${elapsed.toFixed(1)}s + ${hits} urti`;
 
     if (balls.length === 0) {
       running = false;
@@ -471,16 +485,17 @@
   }
 
   function gameOver() {
-    if (elapsed > best) {
-      best = elapsed;
+    const finalScore = elapsed + hits;
+    if (finalScore > best) {
+      best = finalScore;
       localStorage.setItem('keepball_best', best.toString());
-      bestEl.textContent = 'Record: ' + best.toFixed(1) + 's';
+      bestEl.textContent = 'Record: ' + best.toFixed(1);
     }
     overlay.classList.remove('hidden');
     overlay.innerHTML = `
       <h1>Game Over!</h1>
-      <div class="finalScore">${elapsed.toFixed(1)}s</div>
-      <p>Record: ${best.toFixed(1)}s</p>
+      <div class="finalScore">${finalScore.toFixed(1)}</div>
+      <p>${elapsed.toFixed(1)}s + ${hits} urti<br>Record: ${best.toFixed(1)}</p>
       <button id="startBtn">Rigioca</button>
     `;
     document.getElementById('startBtn').addEventListener('click', startGame);
