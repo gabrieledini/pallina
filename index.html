@@ -109,23 +109,6 @@
     cursor: pointer;
   }
   #startBtn:active { transform: scale(0.95); }
-  #debug {
-    position: fixed;
-    top: 60px;
-    right: 10px;
-    background: rgba(0, 0, 0, 0.7);
-    color: #43d9ad;
-    font-family: monospace;
-    font-size: 11px;
-    padding: 8px 10px;
-    border-radius: 6px;
-    z-index: 15;
-    line-height: 1.5;
-    pointer-events: none;
-    min-width: 130px;
-  }
-  #debug .err { color: #ff6b6b; }
-  #debug .ok { color: #43d9ad; }
   .hidden { display: none !important; }
   .finalScore { font-size: 48px; color: #e94560; font-weight: 700; margin: 20px 0; }
 </style>
@@ -142,7 +125,6 @@
 
 <div id="ballCount">Palline: 1 / 3</div>
 <button id="addBtn">+</button>
-<div id="debug">sensore: ...</div>
 
 <div id="overlay">
   <h1>🎯 Tieni la Pallina!</h1>
@@ -160,20 +142,6 @@
   const addBtn = document.getElementById('addBtn');
   const overlay = document.getElementById('overlay');
   const startBtn = document.getElementById('startBtn');
-  const debugEl = document.getElementById('debug');
-
-  let sensorEventCount = 0;
-  let sensorStatus = 'in attesa...';
-
-  function updateDebug() {
-    debugEl.innerHTML =
-      `eventi: ${sensorEventCount}<br>` +
-      `stato: <span class="${sensorEventCount > 0 ? 'ok' : 'err'}">${sensorStatus}</span><br>` +
-      `β: ${restBeta === null ? '—' : (restBeta).toFixed(1) + '°'}<br>` +
-      `γ: ${restGamma === null ? '—' : (restGamma).toFixed(1) + '°'}<br>` +
-      `gX: ${gravityX.toFixed(2)}<br>` +
-      `gY: ${gravityY.toFixed(2)}`;
-  }
 
   let W = 0, H = 0, DPR = 1;
   let box = {};
@@ -189,6 +157,7 @@
   let running = false;
   let startTime = 0;
   let elapsed = 0;
+  let lastFrameTime = 0;
   let best = parseFloat(localStorage.getItem('keepball_best') || '0');
   bestEl.textContent = 'Record: ' + best.toFixed(1) + 's';
 
@@ -232,7 +201,8 @@
       y: cy - 50,
       vx: -14, // forte spinta iniziale verso sinistra
       vy: 0,
-      color: ['#f9c80e', '#43d9ad', '#3e92cc'][balls.length]
+      color: ['#f9c80e', '#43d9ad', '#3e92cc'][balls.length],
+      stillTime: 0 // tempo (ms) per cui la pallina è rimasta quasi ferma
     });
     updateBallCount();
   }
@@ -247,6 +217,7 @@
     spawnBall();
     elapsed = 0;
     startTime = performance.now();
+    lastFrameTime = startTime;
     running = true;
   }
 
@@ -451,8 +422,32 @@
   function loop() {
     if (!running) return;
 
+    const now = performance.now();
+    const dt = now - lastFrameTime; // millisecondi dal frame precedente
+    lastFrameTime = now;
+
     for (const b of balls) physicsStep(b);
     resolveBallCollisions();
+
+    // Calcio anti-stallo: se una pallina è quasi ferma per >1s, ricevi un impulso casuale
+    const STILL_SPEED_THRESHOLD = 1.2; // px/frame
+    const STILL_TIME_LIMIT = 1000;     // ms
+    const KICK_STRENGTH = 12;
+    for (const b of balls) {
+      const speed = Math.hypot(b.vx, b.vy);
+      if (speed < STILL_SPEED_THRESHOLD) {
+        b.stillTime += dt;
+        if (b.stillTime >= STILL_TIME_LIMIT) {
+          // Calcio in direzione casuale
+          const angle = Math.random() * Math.PI * 2;
+          b.vx = Math.cos(angle) * KICK_STRENGTH;
+          b.vy = Math.sin(angle) * KICK_STRENGTH;
+          b.stillTime = 0;
+        }
+      } else {
+        b.stillTime = 0;
+      }
+    }
 
     // Verifica se qualche pallina è uscita dal buco
     for (let i = balls.length - 1; i >= 0; i--) {
@@ -462,7 +457,7 @@
       }
     }
 
-    elapsed = (performance.now() - startTime) / 1000;
+    elapsed = (now - startTime) / 1000;
     scoreEl.textContent = elapsed.toFixed(1) + 's';
 
     if (balls.length === 0) {
@@ -504,34 +499,17 @@
   // gamma: rotazione attorno all'asse Y del telefono. Positivo = lato destro abbassato
   //        → la pallina scivola a destra.
   function handleOrientation(e) {
-    sensorEventCount++;
-    sensorStatus = 'attivo';
-
-    if (e.gamma === null || e.beta === null) {
-      sensorStatus = 'valori null';
-      updateDebug();
-      return;
-    }
+    if (e.gamma === null || e.beta === null) return;
 
     // Calibrazione al primo evento: la posizione di tenuta attuale diventa "tavolino orizzontale".
     if (restBeta === null) {
       restBeta = e.beta;
       restGamma = e.gamma;
-      updateDebug();
       return;
     }
 
     let deltaGamma = e.gamma - restGamma; // inclinazione laterale rispetto al riposo
     let deltaBeta = e.beta - restBeta;    // inclinazione avanti/indietro rispetto al riposo
-
-    // Mostro i delta correnti nel debug
-    debugEl.innerHTML =
-      `eventi: ${sensorEventCount}<br>` +
-      `stato: <span class="ok">attivo</span><br>` +
-      `Δβ: ${deltaBeta.toFixed(1)}°<br>` +
-      `Δγ: ${deltaGamma.toFixed(1)}°<br>` +
-      `gX: ${gravityX.toFixed(2)}<br>` +
-      `gY: ${gravityY.toFixed(2)}`;
 
     // Sensibilità: 20° di inclinazione = gravità piena lungo quell'asse
     const SENSITIVITY_DEG = 20;
@@ -570,30 +548,20 @@
   }
 
   async function requestMotionPermission() {
-    sensorStatus = 'richiesta permesso...';
-    updateDebug();
-
     // iOS 13+ richiede permesso esplicito
     if (typeof DeviceOrientationEvent !== 'undefined' &&
         typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
         const r = await DeviceOrientationEvent.requestPermission();
         if (r === 'granted') {
-          sensorStatus = 'permesso ok';
           window.addEventListener('deviceorientation', handleOrientation);
-        } else {
-          sensorStatus = 'permesso NEGATO';
         }
       } catch (err) {
-        sensorStatus = 'errore: ' + err.message;
+        console.warn('Permesso negato', err);
       }
     } else if ('DeviceOrientationEvent' in window) {
-      sensorStatus = 'in ascolto...';
       window.addEventListener('deviceorientation', handleOrientation);
-    } else {
-      sensorStatus = 'sensore NON supportato';
     }
-    updateDebug();
   }
 
   // Fallback per desktop: i tasti freccia simulano l'inclinazione del tavolino
@@ -631,7 +599,6 @@
 
   // Setup iniziale
   resize();
-  updateDebug();
 })();
 </script>
 </body>
